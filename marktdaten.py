@@ -11,14 +11,28 @@ def hole_aktien_daten(ticker):
     try:
         t = yf.Ticker(ticker)
         info = t.info
+        
+        # Prüfe, ob wir überhaupt Daten bekommen haben
+        if not info or len(info) < 5:
+            return None
+        
+        kurs = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+        if kurs == 0:
+            # Fallback: Historie letzter Tag
+            hist = t.history(period="5d")
+            if not hist.empty:
+                kurs = float(hist["Close"].iloc[-1])
+        
         return {
-            "name": info.get("shortName", ticker),
-            "kurs": info.get("currentPrice", 0),
+            "name": info.get("shortName") or info.get("longName") or ticker,
+            "kurs": kurs,
             "waehrung": info.get("currency", "USD"),
-            "dividende_jahr": info.get("dividendRate", 0),
-            "dividenden_rendite": info.get("dividendYield", 0),
+            "dividende_jahr": info.get("dividendRate", 0) or 0,
+            "dividenden_rendite": info.get("dividendYield", 0) or 0,
         }
-    except Exception:
+    except Exception as e:
+        # Bei lokalem Debugging sichtbar
+        print(f"Fehler beim Abruf von {ticker}: {e}")
         return None
 
 
@@ -43,8 +57,12 @@ def hole_wechselkurs(von_waehrung, nach_waehrung="EUR"):
     try:
         ticker_symbol = f"{von_waehrung}{nach_waehrung}=X"
         t = yf.Ticker(ticker_symbol)
-        kurs = t.info.get("regularMarketPrice") or t.history(period="1d")["Close"].iloc[-1]
-        return float(kurs)
+        kurs = t.info.get("regularMarketPrice")
+        if not kurs:
+            hist = t.history(period="5d")
+            if not hist.empty:
+                kurs = float(hist["Close"].iloc[-1])
+        return float(kurs) if kurs else None
     except Exception:
         return None
 
