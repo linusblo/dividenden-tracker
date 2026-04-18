@@ -1,0 +1,13 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Lokale Datenbank (brauchen wir nicht mehr, aber sicherheitshalber)
+*.db
+
+# Mac-Systemdateien
+.DS_Store
+
+# VS Code
+.vscode/
