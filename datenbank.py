@@ -1,76 +1,104 @@
 """
-Datenbank-Zugriff (SQLite).
+Datenbank-Zugriff über Supabase (PostgreSQL in der Cloud).
 """
-import sqlite3
+import streamlit as st
 import pandas as pd
-from config import DB_PFAD
+from supabase import create_client, Client
+
+
+@st.cache_resource
+def _get_client() -> Client:
+    """Erstellt den Supabase-Client (einmalig gecacht)."""
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
 
 def init_db():
-    """Erstellt die Datenbank und migriert bei Bedarf."""
-    conn = sqlite3.connect(DB_PFAD)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS positionen (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL UNIQUE,
-            stueckzahl REAL NOT NULL
-        )
-    """)
-    vorhandene_spalten = [row[1] for row in conn.execute("PRAGMA table_info(positionen)").fetchall()]
-    if "sparrate_betrag" not in vorhandene_spalten:
-        conn.execute("ALTER TABLE positionen ADD COLUMN sparrate_betrag REAL DEFAULT 0")
-    if "sparrate_intervall" not in vorhandene_spalten:
-        conn.execute("ALTER TABLE positionen ADD COLUMN sparrate_intervall INTEGER DEFAULT 4")
-    if "reinvest_dividende" not in vorhandene_spalten:
-        conn.execute("ALTER TABLE positionen ADD COLUMN reinvest_dividende INTEGER DEFAULT 1")
-    conn.commit()
-    conn.close()
+    """
+    Mit Supabase wird die Tabelle einmalig manuell im Dashboard angelegt.
+    Diese Funktion prüft nur, ob die Verbindung funktioniert.
+    """
+    try:
+        _get_client()
+    except Exception as e:
+        st.error(f"Fehler bei der Datenbank-Verbindung: {e}")
 
 
 def lade_positionen():
     """Lädt alle Positionen aus der Datenbank."""
-    conn = sqlite3.connect(DB_PFAD)
-    df = pd.read_sql_query("SELECT * FROM positionen", conn)
-    conn.close()
-    return df
+    try:
+        client = _get_client()
+        response = client.table("positionen").select("*").order("id").execute()
+        data = response.data
+        if not data:
+            return pd.DataFrame(columns=[
+                "id", "ticker", "stueckzahl",
+                "sparrate_betrag", "sparrate_intervall", "reinvest_dividende"
+            ])
+        return pd.DataFrame(data)
+    except Exception as e:
+        st.error(f"Fehler beim Laden der Positionen: {e}")
+        return pd.DataFrame(columns=[
+            "id", "ticker", "stueckzahl",
+            "sparrate_betrag", "sparrate_intervall", "reinvest_dividende"
+        ])
 
 
 def speichere_position(ticker, stueckzahl):
     """Speichert eine neue Position oder aktualisiert eine vorhandene."""
-    conn = sqlite3.connect(DB_PFAD)
-    conn.execute("""
-        INSERT INTO positionen (ticker, stueckzahl) 
-        VALUES (?, ?)
-        ON CONFLICT(ticker) DO UPDATE SET stueckzahl = excluded.stueckzahl
-    """, (ticker.upper(), stueckzahl))
-    conn.commit()
-    conn.close()
+    try:
+        client = _get_client()
+        ticker = ticker.upper()
+        
+        # Prüfen ob Position schon existiert
+        existing = client.table("positionen").select("id").eq("ticker", ticker).execute()
+        
+        if existing.data:
+            # Aktualisieren
+            client.table("positionen").update({
+                "stueckzahl": stueckzahl
+            }).eq("ticker", ticker).execute()
+        else:
+            # Neu einfügen
+            client.table("positionen").insert({
+                "ticker": ticker,
+                "stueckzahl": stueckzahl,
+                "sparrate_betrag": 0,
+                "sparrate_intervall": 4,
+                "reinvest_dividende": 1,
+            }).execute()
+    except Exception as e:
+        st.error(f"Fehler beim Speichern: {e}")
 
 
 def aktualisiere_sparrate(position_id, betrag, intervall):
     """Aktualisiert die Sparrate einer Position."""
-    conn = sqlite3.connect(DB_PFAD)
-    conn.execute("""
-        UPDATE positionen 
-        SET sparrate_betrag = ?, sparrate_intervall = ?
-        WHERE id = ?
-    """, (betrag, intervall, position_id))
-    conn.commit()
-    conn.close()
+    try:
+        client = _get_client()
+        client.table("positionen").update({
+            "sparrate_betrag": betrag,
+            "sparrate_intervall": intervall,
+        }).eq("id", position_id).execute()
+    except Exception as e:
+        st.error(f"Fehler beim Aktualisieren der Sparrate: {e}")
 
 
 def aktualisiere_reinvest(position_id, reinvest):
     """Aktualisiert den Reinvest-Modus einer Position."""
-    conn = sqlite3.connect(DB_PFAD)
-    conn.execute("UPDATE positionen SET reinvest_dividende = ? WHERE id = ?",
-                 (1 if reinvest else 0, position_id))
-    conn.commit()
-    conn.close()
+    try:
+        client = _get_client()
+        client.table("positionen").update({
+            "reinvest_dividende": 1 if reinvest else 0,
+        }).eq("id", position_id).execute()
+    except Exception as e:
+        st.error(f"Fehler beim Aktualisieren: {e}")
 
 
 def loesche_position(position_id):
-    """Löscht eine Position anhand ihrer ID."""
-    conn = sqlite3.connect(DB_PFAD)
-    conn.execute("DELETE FROM positionen WHERE id = ?", (position_id,))
-    conn.commit()
-    conn.close()
+    """Löscht eine Position."""
+    try:
+        client = _get_client()
+        client.table("positionen").delete().eq("id", position_id).execute()
+    except Exception as e:
+        st.error(f"Fehler beim Löschen: {e}")

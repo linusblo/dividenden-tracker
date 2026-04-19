@@ -11,3 +11,6 @@ __pycache__/
 
 # VS Code
 .vscode/
+
+# Streamlit Secrets (API-Keys etc.)
+.streamlit/secrets.toml
