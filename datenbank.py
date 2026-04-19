@@ -1,82 +1,76 @@
 """
-Datenspeicherung über st.session_state (pro Browser-Session).
-Ersetzt die vorherige SQLite-Implementierung.
+Datenbank-Zugriff (SQLite).
 """
-import streamlit as st
+import sqlite3
 import pandas as pd
-
-
-def _ensure_state():
-    """Stellt sicher, dass die Session-State-Struktur existiert."""
-    if "positionen_liste" not in st.session_state:
-        st.session_state.positionen_liste = []
-    if "naechste_id" not in st.session_state:
-        st.session_state.naechste_id = 1
+from config import DB_PFAD
 
 
 def init_db():
-    """Initialisiert die 'Datenbank' (hier: den Session-State)."""
-    _ensure_state()
+    """Erstellt die Datenbank und migriert bei Bedarf."""
+    conn = sqlite3.connect(DB_PFAD)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS positionen (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL UNIQUE,
+            stueckzahl REAL NOT NULL
+        )
+    """)
+    vorhandene_spalten = [row[1] for row in conn.execute("PRAGMA table_info(positionen)").fetchall()]
+    if "sparrate_betrag" not in vorhandene_spalten:
+        conn.execute("ALTER TABLE positionen ADD COLUMN sparrate_betrag REAL DEFAULT 0")
+    if "sparrate_intervall" not in vorhandene_spalten:
+        conn.execute("ALTER TABLE positionen ADD COLUMN sparrate_intervall INTEGER DEFAULT 4")
+    if "reinvest_dividende" not in vorhandene_spalten:
+        conn.execute("ALTER TABLE positionen ADD COLUMN reinvest_dividende INTEGER DEFAULT 1")
+    conn.commit()
+    conn.close()
 
 
 def lade_positionen():
-    """Lädt alle Positionen als DataFrame."""
-    _ensure_state()
-    if not st.session_state.positionen_liste:
-        # Leerer DataFrame mit allen Spalten
-        return pd.DataFrame(columns=[
-            "id", "ticker", "stueckzahl", 
-            "sparrate_betrag", "sparrate_intervall", "reinvest_dividende"
-        ])
-    return pd.DataFrame(st.session_state.positionen_liste)
+    """Lädt alle Positionen aus der Datenbank."""
+    conn = sqlite3.connect(DB_PFAD)
+    df = pd.read_sql_query("SELECT * FROM positionen", conn)
+    conn.close()
+    return df
 
 
 def speichere_position(ticker, stueckzahl):
     """Speichert eine neue Position oder aktualisiert eine vorhandene."""
-    _ensure_state()
-    ticker = ticker.upper()
-    
-    # Schon vorhanden? Dann aktualisieren.
-    for pos in st.session_state.positionen_liste:
-        if pos["ticker"] == ticker:
-            pos["stueckzahl"] = stueckzahl
-            return
-    
-    # Sonst neue Position anlegen
-    st.session_state.positionen_liste.append({
-        "id": st.session_state.naechste_id,
-        "ticker": ticker,
-        "stueckzahl": stueckzahl,
-        "sparrate_betrag": 0.0,
-        "sparrate_intervall": 4,
-        "reinvest_dividende": 1,
-    })
-    st.session_state.naechste_id += 1
+    conn = sqlite3.connect(DB_PFAD)
+    conn.execute("""
+        INSERT INTO positionen (ticker, stueckzahl) 
+        VALUES (?, ?)
+        ON CONFLICT(ticker) DO UPDATE SET stueckzahl = excluded.stueckzahl
+    """, (ticker.upper(), stueckzahl))
+    conn.commit()
+    conn.close()
 
 
 def aktualisiere_sparrate(position_id, betrag, intervall):
     """Aktualisiert die Sparrate einer Position."""
-    _ensure_state()
-    for pos in st.session_state.positionen_liste:
-        if pos["id"] == position_id:
-            pos["sparrate_betrag"] = betrag
-            pos["sparrate_intervall"] = intervall
-            return
+    conn = sqlite3.connect(DB_PFAD)
+    conn.execute("""
+        UPDATE positionen 
+        SET sparrate_betrag = ?, sparrate_intervall = ?
+        WHERE id = ?
+    """, (betrag, intervall, position_id))
+    conn.commit()
+    conn.close()
 
 
 def aktualisiere_reinvest(position_id, reinvest):
     """Aktualisiert den Reinvest-Modus einer Position."""
-    _ensure_state()
-    for pos in st.session_state.positionen_liste:
-        if pos["id"] == position_id:
-            pos["reinvest_dividende"] = 1 if reinvest else 0
-            return
+    conn = sqlite3.connect(DB_PFAD)
+    conn.execute("UPDATE positionen SET reinvest_dividende = ? WHERE id = ?",
+                 (1 if reinvest else 0, position_id))
+    conn.commit()
+    conn.close()
 
 
 def loesche_position(position_id):
     """Löscht eine Position anhand ihrer ID."""
-    _ensure_state()
-    st.session_state.positionen_liste = [
-        pos for pos in st.session_state.positionen_liste 
-        if pos["id"] != position_id
-    ]
+    conn = sqlite3.connect(DB_PFAD)
+    conn.execute("DELETE FROM positionen WHERE id = ?", (position_id,))
+    conn.commit()
+    conn.close()
